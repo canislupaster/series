@@ -1183,9 +1183,9 @@ void Expr::tex(std::ostream& os, Precedence min_prec) const {
 					return;
 				}
 				case Function::Ty::Integrate: {
-					os<<"\\(\\int_{0}^{x} ";
+					os<<"\\int_{0}^{x} {";
 					f.arg->tex(os, prec);
-					os<<"\\,\\)";
+					os<<"} \\,dx";
 					return;
 				}
 				case Function::Ty::Negate: os<<"-"; break;
