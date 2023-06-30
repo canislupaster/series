@@ -1,0 +1,16 @@
+[
+  {"name": "Exponential generating functions", "child": [
+    {"name": "Decks and cards", "child": [
+      {
+        "name": "Permutation cycles",
+        "file": "cycle.md",
+        "desc": "epic stuff"
+      },
+      {
+        "name": "Labelled trees",
+        "file": "cayley.md",
+        "desc": "awesome stuff"
+      }
+    ]}
+  ]}
+]

@@ -1,0 +1,2 @@
+("undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:"undefined"!=typeof window?window:"undefined"!=typeof global?global:{}).parcelRequire94c2.register("lzvyP",function(e,n){e.exports=JSON.parse('[{"name":"Exponential generating functions","child":[{"name":"Decks and cards","child":[{"name":"Permutation cycles","file":"cycle.md","desc":"epic stuff"},{"name":"Labelled trees","file":"cayley.md","desc":"awesome stuff"}]}]}]')});
+//# sourceMappingURL=db.2a608a5e.js.map
