@@ -1,5 +1,5 @@
-#define _GLIBCXX_DTS2_CONDITION_VARIABLE_ANY
 #include <iostream>
+#include <stdexcept>
 #include <vector>
 #include <map>
 #include <algorithm>
@@ -13,6 +13,7 @@
 #include <atomic>
 #include <list>
 #include <queue>
+#include <numeric>
 
 #ifdef EMSCRIPTEN
 #include <emscripten.h>
@@ -78,6 +79,12 @@ struct ExpectedSomething: public std::exception {
 	}
 };
 
+struct NoImaginary: public std::exception {
+	char const* what() const noexcept {
+		return "whoops, it seems that i doesn't exist here. maybe it never did to begin with?";
+	}
+};
+
 struct MissingDep: public std::exception {
 	std::string err;
 	MissingDep(std::string const& name) {
@@ -89,6 +96,10 @@ struct MissingDep: public std::exception {
 };
 
 std::optional<mpq_class> rat_pow(int a, int b, mpq_class const& c) {
+	int g = std::gcd(a,b); a/=g, b/=g;
+
+	if (b%2==0 && c<0) return std::optional<mpq_class>();
+
 	mpq_class cpow;
 	int r1 = mpz_root(cpow.get_den_mpz_t(), c.get_den_mpz_t(), std::abs(b));
 	int r2 = mpz_root(cpow.get_num_mpz_t(), c.get_num_mpz_t(), std::abs(b));
@@ -101,10 +112,138 @@ std::optional<mpq_class> rat_pow(int a, int b, mpq_class const& c) {
 	return cpow;
 }
 
-struct IRat {
-	mpq_class r, i;
+struct FactRat {
+	int fact=1;
+	mpq_class x;
+	mpz_class fact_v=1;
 
-	IRat(mpq_class r=0, mpq_class i=0) : r(r), i(i) {}
+	void extend() {
+		mpz_class out_q;
+		while (mpz_tdiv_q_ui(out_q.get_mpz_t(), x.get_den_mpz_t(), fact+1) == 0) {
+			fact++, x.get_den() = out_q, fact_v*=fact;
+		}
+	}
+
+	FactRat(int fact, mpq_class x, mpz_class v): fact(fact), x(x), fact_v(v) {}
+	FactRat(int x): x(x) {extend();}
+	FactRat(mpq_class x): x(x) {extend();}
+
+	template<bool add>
+	FactRat add_sub(FactRat const& other) const {
+		FactRat const* t = this, *other_p=&other;
+		if (other.fact>fact) std::swap(t,other_p);
+
+		if (other_p->fact>1) {
+			mpq_class fact_rat;
+			mpz_divexact(fact_rat.get_num_mpz_t(), t->fact_v.get_mpz_t(), other_p->fact_v.get_mpz_t());
+
+			fact_rat *= other_p->x;
+
+			if (add) {fact_rat += t->x;} else {
+				fact_rat -= t->x;
+				if (other.fact>fact) mpq_neg(fact_rat.get_mpq_t(), fact_rat.get_mpq_t());
+			}
+
+			fact_rat /= t->fact_v;
+			return fact_rat;
+		} else {
+			FactRat t_c = *t;
+
+			if (add) {t_c.x += t_c.fact_v * other_p->x;} else {
+				t_c.x -= t_c.fact_v * other_p->x;
+				if (other.fact>fact) mpq_neg(t_c.x.get_mpq_t(), t_c.x.get_mpq_t());
+			}
+
+			t_c.extend();
+			return t_c;
+		}
+	}
+
+	template<bool add>
+	FactRat operator-(FactRat const& other) const {
+		return add_sub<false>(other);
+	}
+
+	FactRat operator+(FactRat const& other) const {
+		return add_sub<true>(other);
+	}
+
+	FactRat operator*(FactRat const& other) const {
+		FactRat const* t = this, *other_p=&other;
+		if (other.fact>fact) std::swap(t,other_p);
+
+		FactRat out(t->fact, t->x*other_p->x/other_p->fact_v, t->fact_v);
+		out.extend();
+		return out;
+	}
+
+	FactRat operator/(FactRat const& other) const {
+		FactRat out = *this;
+		out/=other;
+		return out;
+	}
+
+	FactRat& operator+=(FactRat const& other) {
+		*this = *this+other;
+		return *this;
+	}
+
+	FactRat& operator-=(FactRat const& other) {
+		*this = *this-other;
+		return *this;
+	}
+
+	FactRat& operator*=(FactRat const& other) {
+		x*=other.x;
+		if (other.fact>fact) {
+			x/=fact_v;
+			fact=other.fact, fact_v=other.fact_v;
+		} else {
+			x/=other.fact_v;
+		}
+
+		extend();
+		return *this;
+	}
+
+	FactRat& operator/=(FactRat const& other) {
+		if (other.fact==1) {
+			x/=other.x;
+		} else if (other.fact>=fact) {
+			mpz_class fact_rat;
+			mpz_divexact(fact_rat.get_mpz_t(), other.fact_v.get_mpz_t(), fact_v.get_mpz_t());
+
+			x*=fact_rat/other.x;
+			fact=1, fact_v=1;
+		} else {
+			mpz_class fact_rat;
+			mpz_divexact(fact_rat.get_mpz_t(), fact_v.get_mpz_t(), other.fact_v.get_mpz_t());
+
+			x/=(other.x*fact_rat);
+			fact=1, fact_v=1;
+		}
+
+		extend();
+		return *this;
+	}
+
+	operator bool() const {
+		return x.operator bool();
+	}
+
+	friend std::ostream& operator<<(std::ostream& os, const FactRat& r) {
+		if (r.fact==1) os<<r.x;
+		else os<<r.x.get_num()<<"/("<<r.x.get_den()<<"*"<<r.fact<<"!)";
+
+		return os;
+	}
+};
+
+template<class Rat=mpq_class>
+struct IRat {
+	Rat r, i;
+
+	IRat(Rat r=0, Rat i=0) : r(r), i(i) {}
 	IRat(int r) : r(r), i(0) {}
 
 	IRat operator+(IRat const& other) const {
@@ -128,7 +267,7 @@ struct IRat {
 	IRat operator/(IRat const& other) const {
 		if (i==0 && other.i==0) return IRat(r/other.r,0);
 
-		mpq_class denom = other.r * other.r + other.i * other.i;
+		Rat denom = other.r * other.r + other.i * other.i;
 		return IRat((r * other.r + i * other.i) / denom, (i * other.r - r * other.i) / denom);
 	}
 
@@ -171,32 +310,47 @@ struct IRat {
 	}
 };
 
-template<class Rat=IRat>
+template<class Rat>
 struct RPolynomial;
 
 template<class T>
 std::ostream& operator<<(std::ostream& os, RPolynomial<T> const& x);
 
 template<class T>
-std::optional<mpq_class> to_rat(T const& t) {
-	static_assert(False<T>::value, "unimplemented");
-}
-
-template<>
-std::optional<mpq_class> to_rat<IRat>(IRat const& t) {
+std::optional<mpq_class> to_rat(IRat<T> const& t) {
 	if (t.i) return std::optional<mpq_class>();
-	else return std::make_optional(t.r);
+	else return to_rat(t.r);
 }
 
-template<>
-std::optional<mpq_class> to_rat<mpq_class>(mpq_class const& t) {
+std::optional<mpq_class> to_rat(FactRat const& t) {
+	mpq_class out;
+	out.get_num() = t.x.get_num();
+	out.get_den() = t.x.get_den()*t.fact_v;
+	return out;
+}
+
+std::optional<mpq_class> to_rat(mpq_class const& t) {
 	return std::make_optional(t);
 }
 
-struct MulJob;
-using MulJobPtr = std::shared_ptr<MulJob>;
-struct EvalJob;
-using EvalJobPtr = std::shared_ptr<EvalJob>;
+std::optional<mpq_class> to_rat(mpf_class const& t) {
+	return mpq_class(t);
+}
+
+struct JobInterface {
+	bool done=false;
+	virtual void run(std::shared_ptr<JobInterface> ptr) = 0;
+	virtual ~JobInterface() {}
+};
+
+using JobPtr = std::shared_ptr<JobInterface>;
+
+struct Expr;
+using ExprPtr = std::shared_ptr<Expr>;
+using ConstExprPtr = std::shared_ptr<const Expr>;
+
+struct Entry;
+using EntryPtr = std::shared_ptr<Entry>;
 
 struct ThreadPool {
 	std::mutex m;
@@ -204,57 +358,72 @@ struct ThreadPool {
 	std::condition_variable cond_queue;
 	std::condition_variable cond_complete;
 
-	using P = RPolynomial<>*;
-
-	std::queue<MulJobPtr> unstarted_mul;
-	std::queue<EvalJobPtr> unstarted_eval;
+	std::queue<JobPtr> unstarted;
 
 	void run();
 
-	ThreadPool(int n): n(n), busy(n) {
+	ThreadPool(int n): busy(n), n(n) {
 		for (int i=0; i<n; i++) {
+			std::cout<<"spawning thread #"<<i<<"\n";
 			std::thread thd(&ThreadPool::run, this);
 			thd.detach();
 		}
 	}
 };
 
-ThreadPool pool(std::min(std::thread::hardware_concurrency(), 30u));
+ThreadPool pool(std::min(std::thread::hardware_concurrency(), 40u));
 
 template<class Rat>
 struct RPolynomial {
-	std::vector<Rat> coeffs;
-
-	int offset;
-
 	using Vec = std::vector<Rat>;
+
+	Vec coeffs;
+	thread_local static std::function<Rat(IRat<mpq_class> x)> ctor;
+	int offset;
 
 	thread_local static std::map<int, Vec> free;
 	
 	void resize(int size) {
 		//just in case i add a mpq freelist lmao, probably wont make things any faster tho
-		coeffs.resize(size, 0);
+		if (size>0) coeffs.resize(size, ctor(0));
+		else coeffs.clear();
 	}
 
 	RPolynomial(std::initializer_list<Rat> coeffs, int offset=0): coeffs(coeffs), offset(offset) {}
 
-	RPolynomial(int num_coeffs=0, int offset=0): offset(offset) {
-		if (free.empty()) {
-			resize(num_coeffs);
-			return;
-		}
-		
+	void get_free(int num_coeffs) {
+		if (free.empty()) return;
 		auto it = free.lower_bound(num_coeffs);
 		if (it==free.end()) it--;
-		this->coeffs.swap(it->second);
+
+		coeffs.swap(it->second);
 		
 		free.erase(it);
+	}
 
+	RPolynomial(int num_coeffs=0, int offset=0): offset(offset) {
+		get_free(num_coeffs);
+		
+		for (int i=0; i<std::min(num_coeffs, (int)coeffs.size()); i++)
+			coeffs[i]=0; //TODO: remove this and streamline initialization...
 		resize(num_coeffs);
 	}
 
-	RPolynomial(RPolynomial const& other): RPolynomial(other.coeffs.size(), other.offset) {
+	RPolynomial(RPolynomial const& other): offset(other.offset) {
+		get_free(other.coeffs.size());
 		coeffs.assign(other.coeffs.begin(), other.coeffs.end());
+	}
+
+	static RPolynomial from(RPolynomial<IRat<mpq_class>> const& other) {
+		RPolynomial out({}, other.offset);
+		out.get_free(other.coeffs.size());
+		
+		for (int i=0; i<other.coeffs.size(); i++) {
+			if (i>=out.coeffs.size()) out.coeffs.emplace_back(ctor(other.coeffs[i]));
+			else out.coeffs[i]=ctor(other.coeffs[i]);
+		}
+
+		return out;
 	}
 
 	void canonicalize() {
@@ -321,7 +490,7 @@ struct RPolynomial {
 
 		Rat x;
 		for (int i=i_max; i>=0 && *cont; i--) {
-			x=0;
+			x=ctor(0);
 
 			for (int j=std::max(i-(int)other.coeffs.size()+1, 0); j<=std::min(i,(int)coeffs.size()-1); j++) {
 				x+=coeffs[j]*other.coeffs[i-j];
@@ -382,12 +551,13 @@ struct RPolynomial {
 	RPolynomial inv(int len) const {
 		if (coeffs.empty()) throw ZeroPolynomial();
 
+		len += offset;
+
 		RPolynomial out(len+1,-offset);
 		RPolynomial res(len+1);
 
-		len += offset;
 		for (int i=0; i<=len && *cont; i++) {
-			if (i==0) out.coeffs[i] = Rat(1);
+			if (i==0) out.coeffs[i] = ctor(1);
 			else out.coeffs[i] = -res.coeffs[i];
 			out.coeffs[i] /= coeffs[0];
 
@@ -398,11 +568,6 @@ struct RPolynomial {
 
 		out.canonicalize();
 		return out;
-	}
-
-	std::optional<Rat> is_constant() {
-		if (coeffs.size()>1 || offset!=0) return std::optional<Rat>();
-		return std::make_optional(coeffs[0]);
 	}
 
 	template<class F>
@@ -468,29 +633,31 @@ struct RPolynomial {
 	RPolynomial substitute_skip(RPolynomial const& other, int len) const {
 		RPolynomial& x = const_cast<RPolynomial&>(*this); //🧌
 
-		Rat constant = coeffs[-offset];
-		x.coeffs[-offset]=0;
-		x.canonicalize();
+		Rat constant = coeffs[0];
 
-		RPolynomial out = substitute(other, len);
+		auto it = x.coeffs.begin();
+		for (; it!=x.coeffs.end() && (x.offset==0 || !*it); x.offset++, it++);
+		x.coeffs.erase(x.coeffs.begin(), it);
+
+		RPolynomial out = x.substitute(other, len);
 		
-		if (x.offset==1) x.coeffs.insert(x.coeffs.begin(), constant);
-		else if (-x.offset==x.coeffs.size()) x.coeffs.push_back(constant);
-		else x.coeffs[-offset]=constant;
+		for (; x.offset>0; x.offset--) {
+			x.coeffs.insert(x.coeffs.begin(), x.offset==1 ? constant : ctor(0));
+		}
 
 		return out;
 	}
 
 	RPolynomial positive_pow(int pow, int len) const {
 		if (pow==0) {
-			return RPolynomial({Rat(1)}, 0);
+			return RPolynomial({ctor(1)}, 0);
 		} else if (pow==1) {
 			return *this;
 		}
 
 		assert(pow>0);
 
-		RPolynomial out({Rat(1)}, 0);
+		RPolynomial out({ctor(1)}, 0);
 		RPolynomial tmp = *this;
 
 		for (; pow>0 && *cont; pow>>=1) {
@@ -520,13 +687,13 @@ struct RPolynomial {
 			cpow=1/cpow;
 		}
 
-		series.coeffs[0] = cpow;
+		series.coeffs[0] = ctor(cpow);
 		mpq_class mul = cpow;
 
 		mpq_class k = mpq_class(mpz_class(a), mpz_class(b));
 		for (int i=1; i<=len && *cont; i++) {
 			mul *= k/(i*c_rat);
-			series.coeffs[i] = Rat(mul);
+			series.coeffs[i] = ctor(mul);
 			
 			k-=1;
 			if (k==0) break;
@@ -538,10 +705,10 @@ struct RPolynomial {
 	static RPolynomial exp_series(int len, Rat exp) {
 		RPolynomial out(len+1);
 
-		Rat mul=1;
+		Rat mul=ctor(1);
 		for (int i=0; i<=len && *cont; i++) {
 			out.coeffs[i]=mul;
-			mul*=exp/Rat(i+1);
+			mul*=exp/ctor(i+1);
 		}
 
 		return out;
@@ -550,11 +717,11 @@ struct RPolynomial {
 	static RPolynomial ln_series(int len, Rat x) {
 		RPolynomial series(len+1, 1);
 
-		Rat mul=1;
+		Rat mul=ctor(1);
 		for (int i=0; i<=len && *cont; i++) {
 			mul*=x;
-			if (i%2==1) series.coeffs[i]=-mul/Rat(i+1);
-			else series.coeffs[i]=mul/Rat(i+1);
+			if (i%2==1) series.coeffs[i]=-mul/ctor(i+1);
+			else series.coeffs[i]=mul/ctor(i+1);
 		}
 
 		return series;
@@ -568,7 +735,7 @@ struct RPolynomial {
 		x*=x;
 		for (int i=sin ? 1 : 0, term=0; term<=len && *cont; i+=2, term+=2) {
 			out.coeffs[term] = mul;
-			mul *= -x/Rat((i+1)*(i+2));
+			mul *= -x/ctor((i+1)*(i+2));
 		}
 
 		return out;
@@ -579,7 +746,7 @@ struct RPolynomial {
 	}
 
 	RPolynomial pow(int len, int a, int b) const {
-		if (a==0) return RPolynomial({Rat(1)});
+		if (a==0) return RPolynomial({ctor(1)});
 		if (a>0 && b>0 && (b==1 || a%b==0)) return positive_pow(a/b, len);
 
 		if (coeffs.empty()) {
@@ -593,7 +760,7 @@ struct RPolynomial {
 		return substitute_skip(series, len);
 	}
 
-	RPolynomial log(int len, Rat mul=1) const {
+	RPolynomial log(int len, Rat mul=ctor(1)) const {
 		if (offset!=0 || coeffs.empty() || coeffs[0]!=1) throw LogNotOne();
 
 		RPolynomial series = ln_series(len, mul);
@@ -625,30 +792,18 @@ struct RPolynomial {
 		}
 	}
 
-	RPolynomial exp(int len, Rat mul=1) const {
+	RPolynomial exp(int len, Rat mul=ctor(1)) const {
 		if (offset<=0) throw ExpNotZero();
 
 		RPolynomial series = exp_series(len, mul);
 		return substitute(series, len);
 	}
 
-	RPolynomial sin_cos(size_t len, bool sin, Rat mul=1) const {
+	RPolynomial sin_cos(size_t len, bool sin, Rat mul=ctor(1)) const {
 		if (offset<=0) throw ExpNotZero();
 
 		RPolynomial series = sin_cos_series(len , sin, mul);
 		return substitute(series, len);
-	}
-
-	template<class T>
-	T evaluate(T v) {
-		T out=0;
-		T xpow=1;
-		for (int i=0; i<coeffs.size(); i++) {
-			out+=xpow*coeffs[i];
-			xpow*=v;
-		}
-
-		return out;
 	}
 
 	friend std::ostream& operator<<(std::ostream& os, RPolynomial const& x) {
@@ -667,23 +822,65 @@ struct RPolynomial {
 		return os;
 	}
 
+	RPolynomial(RPolynomial&& other): coeffs(std::move(other.coeffs)), offset(other.offset) {}
+	RPolynomial& operator=(RPolynomial&& other) {coeffs.swap(other.coeffs); offset=other.offset; return *this;}
+	RPolynomial& operator=(RPolynomial const& other) {coeffs=other.coeffs; offset=other.offset; return *this;}
+
 	~RPolynomial() {
 		if (coeffs.size()>100) free.emplace(coeffs.size(), std::move(coeffs));
 	}
 };
 
-template<>
-thread_local std::map<int, std::vector<IRat>> RPolynomial<>::free = {};
+template<class T>
+thread_local std::map<int, std::vector<T>> RPolynomial<T>::free = {};
 
-struct MulJob {
-	RPolynomial<> x;
-	RPolynomial<>* incs;
+template<class T>
+thread_local std::function<T(IRat<mpq_class>)> RPolynomial<T>::ctor = [](IRat<mpq_class> x){
+	throw std::runtime_error("whoops i forgot to initialize the constructor, which happens to be stored in a global variable (aka very a safe efficient and idiomatic way to keep very temporary and instance-specific data)");
+	return T(x);
+};
+
+template<class R>
+struct MulJob: JobInterface {
+	std::function<R(IRat<mpq_class>)>	ctor;
+
+	RPolynomial<R> x;
+	std::shared_ptr<std::vector<RPolynomial<R>>> incs;
 	int len;
 
 	int i, step, num;
 
 	std::shared_ptr<bool> cont_ptr;
-	std::weak_ptr<std::vector<MulJobPtr>> completed;
+	std::shared_ptr<std::vector<JobPtr>> completed;
+
+	MulJob(std::function<R(IRat<mpq_class>)> ctor, RPolynomial<R> x, std::shared_ptr<std::vector<RPolynomial<R>>> incs, int len, int i, int step, int num, std::shared_ptr<bool> cont_ptr, std::shared_ptr<std::vector<JobPtr>> completed): ctor(ctor), x(x), incs(incs), len(len), i(i), step(step), num(num), cont_ptr(cont_ptr), completed(completed) {}
+	
+	void run(JobPtr ptr) {
+		cont=cont_ptr;
+		RPolynomial<R>::ctor = ctor;
+
+		x.karatsuba_mul(incs->at(step), len);
+
+		int num_job=0;
+
+		{
+			std::lock_guard lock(pool.m);
+
+			if (*cont) {
+				completed->push_back(ptr);
+
+				for (int j=0; j<step && i+(1<<j)<num; j++, num_job++) {
+					auto newjob = std::make_shared<MulJob<R>>(*this);
+					newjob->i=i+(1<<j), newjob->step=j;
+
+					pool.unstarted.push(newjob);
+				}
+			}
+		}
+
+		pool.cond_complete.notify_one();
+		for (int i=1; i<num_job; i++) pool.cond_queue.notify_one();
+	}
 };
 
 template<class Rat>
@@ -701,19 +898,21 @@ void RPolynomial<Rat>::mul_range(F done, RPolynomial& base, RPolynomial const& i
 	}
 
 	int logn=0; for (; (1<<(logn+1))<=num; logn++);
-	RPolynomial incs[logn+1];
-	auto completed = std::make_shared<std::vector<MulJobPtr>>();
+	auto incs = std::make_shared<std::vector<RPolynomial>>(logn+1);
+	auto completed = std::make_shared<std::vector<JobPtr>>();
 
-	incs[0] = inc;
+	incs->front() = std::move(inc);
 	for (int i=0; i<=logn && *cont; i++) {
 		if (i>0) {
-			incs[i] = incs[i-1];
-			incs[i].karatsuba_mul(incs[i-1], len);
+			RPolynomial& x = incs->at(i), &y = incs->at(i-1);
+
+			x=y;
+			x.karatsuba_mul(y, len);
 		}
 
 		{
 			std::lock_guard lock(pool.m);
-			pool.unstarted_mul.push(std::make_shared<MulJob>(MulJob {.x=base, .incs=incs, .len=len, .i=(1<<i), .step=i, .num=num, .cont_ptr=cont, .completed=completed}));
+			pool.unstarted.push(std::make_shared<MulJob<Rat>>(ctor, base, incs, len, (1<<i), i, num, cont, completed));
 		}
 
 		pool.cond_queue.notify_one();
@@ -726,11 +925,12 @@ void RPolynomial<Rat>::mul_range(F done, RPolynomial& base, RPolynomial const& i
 		}
 
 		while (completed->size() && *cont) {
-			MulJobPtr j = completed->back();
+			JobPtr ptr = completed->back();
+			auto j = static_cast<MulJob<Rat>&>(*completed->back());
 			completed->pop_back();
 
 			lock.unlock();
-			done(j->x, j->i);
+			done(j.x, j.i);
 			lock.lock();
 			i++;
 		}
@@ -770,8 +970,6 @@ void RPolynomial<Rat>::mul_range(F done, RPolynomial& base, RPolynomial const& i
 //	}
 //};
 
-struct Expr;
-
 enum Precedence: int {
 	none=-1,
 	addsub=1,
@@ -779,7 +977,8 @@ enum Precedence: int {
 	substitute=3,
 	minus=4,
 	pow=5,
-	nobind=6
+	literal=6,
+	nobind=7
 };
 
 bool starts_with(const char** x, char const* cmp) {
@@ -797,15 +996,14 @@ void skip_ws(const char** x) {
 
 struct Notebook;
 
-using ExprPtr = std::shared_ptr<Expr>;
-using ConstExprPtr = std::shared_ptr<const Expr>;
-
 struct Function {
 	enum Ty {
 		Exp,
 		Log,
 		Sin,
 		Cos,
+		Sqrt,
+		Cbrt,
 		Negate,
 		Differentiate,
 		Integrate
@@ -826,12 +1024,9 @@ struct Op {
 	ExprPtr y;
 };
 
-struct Entry;
-using EntryPtr = std::shared_ptr<Entry>;
-
 struct Var {
 	std::string name;
-	EntryPtr ent;
+	std::weak_ptr<Entry> ent;
 };
 
 struct Expr {
@@ -841,16 +1036,15 @@ struct Expr {
 	Precedence prec;
 	
 	template<class T>
-	Expr(T v, Precedence prec=Precedence::nobind): v(v), prec(prec) {}
+	Expr(T v, Precedence prec=Precedence::literal): v(v), prec(prec) {}
 
 	explicit Expr() {}
-
-	RPolynomial<> gf(int len) const;
 	
 	int offset;
-	void set_offset();
+	std::optional<mpq_class> rat;
 
-	std::optional<mpq_class> is_rat() const;
+	void set_offset();
+	void is_rat();
 
 	Map<std::string, std::monostate> deps() const;
 	void link(Notebook& nb);
@@ -877,6 +1071,10 @@ ExprPtr parse(const char** str, Precedence prec) {
 		set_func(Function::Exp, Precedence::pow);
 	} else if (starts_with(str, "exp(")) {
 		set_func(Function::Exp, Precedence::none);
+	} else if (starts_with(str, "sqrt(")) {
+		set_func(Function::Sqrt, Precedence::none);
+	} else if (starts_with(str, "cbrt(")) {
+		set_func(Function::Cbrt, Precedence::none);
 	} else if (starts_with(str, "ln(")) {
 		set_func(Function::Log, Precedence::none);
 	} else if (starts_with(str, "sin(")) {
@@ -927,28 +1125,144 @@ ExprPtr parse(const char** str, Precedence prec) {
 }
 
 //you might be thinking: why the hell is this so gargantuan?
-//valid. but i may multithread :tm: regular ass operations
-struct EvalJob {
+//valid. but i may multithread regular ass operations
+template<class R>
+struct EvalJob: JobInterface {
+	std::function<R(IRat<mpq_class>)> ctor;
+	RPolynomial<R> out;
+
 	ConstExprPtr to_eval;
 	int len;
 	std::shared_ptr<bool> cont_ptr;
 
-	RPolynomial<> out;
-	std::optional<std::string> err;
-	bool done=false;
-
 	std::weak_ptr<Entry> ent;
 	std::shared_ptr<std::mutex> nb_lock;
 
-	void run(bool locked);
+	std::optional<std::string> err;
+
+	EvalJob(Entry& ent, std::weak_ptr<Entry> ent_p, std::function<R(IRat<mpq_class>)> ctor);
+
+	void run(std::shared_ptr<JobInterface> ptr);
+	RPolynomial<R> gf(ConstExprPtr ex, int len) const;
 };
+
+struct EntryOutputInterface {
+	virtual int get_offset() const = 0;
+	virtual std::string get_output() const = 0;
+	virtual RPolynomial<IRat<mpq_class>> get_poly() const = 0;
+	virtual std::optional<IRat<mpq_class>> is_constant() const = 0;
+
+	virtual ~EntryOutputInterface() {}
+};
+
+template<class R>
+struct EntryOutput: EntryOutputInterface {
+	RPolynomial<R> output;
+
+	EntryOutput(RPolynomial<R> output): output(output) {}
+
+	int get_offset() const {return output.offset;}
+
+	std::string get_output() const {static_assert(False<R>::value);}
+	RPolynomial<IRat<mpq_class>> get_poly() const {
+		RPolynomial<IRat<mpq_class>> out;
+		out.offset=output.offset;
+		for (int i=0; i<output.coeffs.size(); i++) {
+			out.coeffs.emplace_back(*to_rat(output.coeffs[i].r), *to_rat(output.coeffs[i].i));
+		}
+
+		return out;
+	}
+
+	std::optional<IRat<mpq_class>> is_constant() const {
+		if (output.coeffs.size()>1 || output.offset!=0) return std::optional<IRat<mpq_class>>();
+		return std::make_optional<IRat<mpq_class>>(*to_rat(output.coeffs[0].r), *to_rat(output.coeffs[0].i));
+	}
+};
+
+template<>
+RPolynomial<IRat<mpq_class>> EntryOutput<IRat<mpq_class>>::get_poly() const {
+	return output;
+}
+
+template<>
+std::string EntryOutput<IRat<mpq_class>>::get_output() const {
+	std::ostringstream oss;
+	oss<<output.offset<<"\n";
+
+	for (int i=0; i<output.coeffs.size(); i++) {
+		oss<<output.coeffs[i].r.get_num()<<"\n"<<output.coeffs[i].r.get_den()<<"\n";
+		oss<<output.coeffs[i].i.get_num()<<"\n"<<output.coeffs[i].i.get_den()<<"\n";
+	}
+
+	return oss.str();
+}
+
+template<>
+std::string EntryOutput<IRat<FactRat>>::get_output() const {
+	std::ostringstream oss;
+	oss<<output.offset<<"\n";
+
+	mpz_class fact_start;
+	mpz_fac_ui(fact_start.get_mpz_t(), std::abs(output.offset-1));
+	if (output.offset<0 && output.offset%2==1)
+		mpz_neg(fact_start.get_mpz_t(), fact_start.get_mpz_t());
+
+	int j=output.offset;
+	mpz_class d; mpq_class q;
+
+	auto format = [&oss,&j,&fact_start,d,q] (FactRat const& x) mutable {
+		q=x.x;
+		if (x.fact>std::abs(j)) {
+			mpz_divexact(d.get_mpz_t(), x.fact_v.get_mpz_t(), fact_start.get_mpz_t());
+			q/=d;
+		} else {
+			mpz_divexact(d.get_mpz_t(), fact_start.get_mpz_t(), x.fact_v.get_mpz_t());
+			q*=d;
+		}
+
+		oss<<q.get_num()<<"\n"<<q.get_den()<<"\n";
+	};
+
+	for (int i=0; i<output.coeffs.size(); i++,j++) {
+		if (j<0) mpz_divexact_ui(fact_start.get_mpz_t(), fact_start.get_mpz_t(), 1-j);
+		else if (j>0) fact_start *= j;
+
+		format(output.coeffs[i].r);
+		format(output.coeffs[i].i);
+	}
+
+	oss<<"\n";
+
+	return oss.str();
+}
+
+template<>
+std::string EntryOutput<IRat<mpf_class>>::get_output() const {
+	std::ostringstream oss;
+	oss<<output.offset<<"\n";
+
+	auto format = [&oss](mpf_class const& x) {
+		mp_exp_t e;
+		std::string s = x.get_str(e);
+		e = e-s.length();
+		oss<<s<<"\n"<<e<<"\n";
+	};
+
+	for (int i=0; i<output.coeffs.size(); i++) {
+		format(output.coeffs[i].r);
+		format(output.coeffs[i].i);
+	}
+
+	return oss.str();
+}
 
 struct Entry {
 	std::string name;
 	std::shared_ptr<std::mutex> nb_lock;
 
 	ConstExprPtr ex;
-	RPolynomial<> output;
+	std::unique_ptr<EntryOutputInterface> output;
 	int len;
 
 	int mark;
@@ -963,11 +1277,17 @@ struct Entry {
 	std::vector<EntryPtr> dependents;
 	Map<std::string, std::monostate> deps;
 
-	EvalJobPtr job;
+	enum class OutputKind {
+		Float, EGF, OGF
+	} out_kind;
+
+	int float_prec;
+
+	JobPtr job;
 	bool changed=false;
 	std::shared_ptr<bool> eval_cont;
 
-	static void evaluate(EntryPtr ent) {
+	static void evaluate(EntryPtr ent, std::unique_lock<std::mutex>& lock) {
 		std::cout<<"evaluating "<<ent->name<<std::endl;
 
 		ent->cancel();
@@ -976,48 +1296,71 @@ struct Entry {
 		ent->eval_error.reset();
 
 		std::cout<<"spawning job"<<std::endl;
-		ent->job = std::make_shared<EvalJob>(std::move(EvalJob {
-				.to_eval=ent->ex,
-				.len=ent->len, .cont_ptr=ent->eval_cont,
-				.ent=std::weak_ptr<Entry>(ent), .nb_lock=ent->nb_lock
-		}));
+
+		switch (ent->out_kind) {
+			case OutputKind::OGF: {
+				ent->job = std::make_shared<EvalJob<IRat<mpq_class>>>(*ent, ent, [](IRat<mpq_class> x){
+						return IRat<mpq_class>(x);
+					});
+
+				break;
+			}
+			case OutputKind::Float: {
+				int fp = ent->float_prec;
+				ent->job = std::make_shared<EvalJob<IRat<mpf_class>>>(*ent, ent, [fp](IRat<mpq_class> x){
+						return IRat<mpf_class>(mpf_class(x.r, fp), mpf_class(x.i, fp));
+					});
+					
+				break;
+			}
+			case OutputKind::EGF: {
+				ent->job = std::make_shared<EvalJob<IRat<FactRat>>>(*ent, ent, [](IRat<mpq_class> x){
+						return IRat<FactRat>(FactRat(x.r), FactRat(x.i));
+					});
+
+				break;
+			}
+		}
 
 		bool b;
 
 		{
-			std::lock_guard lock(pool.m);
+			std::lock_guard pool_lock(pool.m);
 
 			b = pool.busy==pool.n;
 			std::cout<<pool.busy<<" "<<pool.n<<std::endl;
-			if (!b) pool.unstarted_eval.push(ent->job);
+			if (!b) pool.unstarted.push(ent->job);
 		}
 
 		if (b) {
-			ent->job->run(true);
+			std::cout<<"pool busy, launching on main thread"<<std::endl;
+			lock.unlock();
+			ent->job->run(ent->job);
+			lock.lock();
 		} else {
 			pool.cond_queue.notify_one();
 		}
 	}
 
-	void propagate() {
+	void propagate(std::unique_lock<std::mutex>& lock) {
 		for (auto dep: dependents) {
 			std::cout<<name<<" (done evaluating) dependend on by "<<dep->name<<" "<<dep->mark<<" "<<dep->deps.count<<std::endl;
 			if (!dep->cycle && !dep->missing_dep && (++dep->mark)==dep->deps.count) {
-				evaluate(dep);
+				evaluate(dep, lock);
 			}
 		}
 	}
 
 	void cancel() {
 		if (eval_cont) *eval_cont = false;
-		if (job) job->ent.reset();
 		job.reset();
 	}
 
 	void wait() {
-		EvalJobPtr p;
+		JobPtr p;
 		{
 			std::lock_guard lock(*nb_lock);
+			if (!job) return;
 			p=job;
 		}
 
@@ -1040,16 +1383,7 @@ struct Entry {
 
 	std::string get_output() {
 		std::lock_guard lock(*nb_lock);
-		std::ostringstream oss;
-
-		oss<<output.offset<<"\n";
-
-		for (int i=0; i<=std::min((int)output.coeffs.size()-1, len); i++) {
-			oss<<output.coeffs[i].r.get_num()<<"\n"<<output.coeffs[i].r.get_den()<<"\n";
-			oss<<output.coeffs[i].i.get_num()<<"\n"<<output.coeffs[i].i.get_den()<<"\n";
-		}
-
-		return oss.str();
+		return output->get_output();
 	}
 
 	std::string get_error() {
@@ -1088,6 +1422,7 @@ struct Entry {
 			ExprPtr new_ex = ::parse(&cstr, Precedence::none);
 			if (strlen(cstr)) throw std::runtime_error("unexpected stuff while parsing");
 
+			new_ex->is_rat();
 			new_ex->set_offset();
 			ex=new_ex;
 
@@ -1099,36 +1434,38 @@ struct Entry {
 	}
 };
 
-void EvalJob::run(bool locked) {
+template<class R>
+void EvalJob<R>::run(JobPtr ptr) {
+	cont = cont_ptr;
+	RPolynomial<R>::ctor = ctor;
+
 	try {
-		out = to_eval->gf(len);
+		out = gf(to_eval, len);
 	} catch (std::exception const& ex) {
 		err.emplace(ex.what());
 	}
 
-	if (nb_lock && *cont) {
-		std::optional<std::lock_guard<std::mutex>> lock;
-		if (!locked) lock.emplace(*nb_lock);
+	std::unique_lock lock(*nb_lock);
+	if (*cont) {
 		if (!ent.expired()) {
-			auto p = ent.lock();
+			EntryPtr p = ent.lock();
 
 			if (err) p->eval_error.emplace(*err);
-			else p->output = std::move(out);
+			else p->output.reset(new EntryOutput<R>(std::move(out)));
 
 			std::cout<<"resetting job for "<<p->name<<std::endl;
 			p->job.reset();
 			p->eval_cont.reset();
 			p->changed=true;
 
-			p->propagate();
+			p->propagate(lock);
 		}
 	}
-
-	{
-		std::lock_guard lock(pool.m);
-		done=true;
-	}
 }
+
+template<class R>
+EvalJob<R>::EvalJob(Entry& ent, std::weak_ptr<Entry> ent_p, std::function<R(IRat<mpq_class>)> ctor):
+	ctor(ctor), to_eval(ent.ex), len(ent.len), cont_ptr(ent.eval_cont), ent(ent_p), nb_lock(ent.nb_lock) {}
 
 struct Notebook {
 	std::vector<EntryPtr> entries;
@@ -1138,38 +1475,43 @@ struct Notebook {
 
 	Notebook(): nb_lock(std::make_shared<std::mutex>()) {}
 
-	EntryPtr add_entry(std::string name, std::string value, int len);
+	EntryPtr add_entry(std::string name, std::string value, int len, Entry::OutputKind outkind, int float_prec);
 	void remove_entry(EntryPtr ent);
-	void update_entry(EntryPtr ent, std::string value, int len);
+	void update_entry(EntryPtr ent, std::string value, int len, Entry::OutputKind outkind, int float_prec);
 	void rename_entry(EntryPtr ent, std::string new_name);
 
-	void check();
+	void check(std::unique_lock<std::mutex>& lock);
 
-//	~Notebook();
+	~Notebook() {
+		std::lock_guard lock(*nb_lock);
+		for (EntryPtr ent: entries) ent->cancel();
+	}
 };
 
 void Expr::tex(std::ostream& os, Precedence min_prec) const {
 	if (prec<min_prec) os<<"\\left(";
+	Precedence in_prec = prec;
 
 	std::visit(overloaded {
 		[&](mpq_class const& q) {os<<q;},
 		[&](Op const& o) {
 			if (o.ty==Op::Ty::Div) {
-				os<<"\\frac{"; o.x->tex(os, prec); os<<"}{"; o.y->tex(os, prec); os<<"}";
+				os<<"\\frac{"; o.x->tex(os, in_prec); os<<"}{"; o.y->tex(os, in_prec); os<<"}";
 				return;
 			}
 
-			os<<"{"; o.x->tex(os, prec); os<<"}";
+			os<<"{"; o.x->tex(os, in_prec); os<<"}";
 
 			switch (o.ty) {
 				case Op::Ty::Pow: os<<"^"; break;
 				case Op::Ty::Sub: os<<" - "; break;
 				case Op::Ty::Add: os<<" + "; break;
 				case Op::Ty::Mul: os<<" \\cdot "; break;
+				case Op::Ty::Substitute: in_prec=Precedence::nobind; break;
 				default:;
 			}
 
-			os<<"{"; o.y->tex(os, prec); os<<"}";
+			os<<"{"; o.y->tex(os, in_prec); os<<"}";
 		},
 		[&](Function const& f) {
 			switch (f.ty) {
@@ -1177,21 +1519,23 @@ void Expr::tex(std::ostream& os, Precedence min_prec) const {
 				case Function::Ty::Cos: os<<"\\cos {"; break;
 				case Function::Ty::Sin: os<<"\\sin {"; break;
 				case Function::Ty::Log: os<<"\\ln {"; break;
+				case Function::Ty::Sqrt: os<<"\\sqrt {", in_prec=Precedence::none; break;
+				case Function::Ty::Cbrt: os<<"\\cbrt {", in_prec=Precedence::none; break;
 				case Function::Ty::Differentiate: {
-					os<<"\\frac{d"; f.arg->tex(os, prec);
+					os<<"\\frac{d"; f.arg->tex(os, in_prec);
 					os<<"}{dx}";
 					return;
 				}
 				case Function::Ty::Integrate: {
 					os<<"\\int_{0}^{x} {";
-					f.arg->tex(os, prec);
+					f.arg->tex(os, in_prec);
 					os<<"} \\,dx";
 					return;
 				}
 				case Function::Ty::Negate: os<<"-"; break;
 			}
 
-			f.arg->tex(os, prec);
+			f.arg->tex(os, in_prec);
 			if (f.ty!=Function::Ty::Negate) os<<"}";
 		},
 		[&](Var const& x) {os<<x.name;}
@@ -1216,10 +1560,9 @@ void Expr::set_offset() {
 				switch (o.ty) {
 					case Op::Ty::Div: return o.x->offset - o.y->offset;
 					case Op::Ty::Pow: {
-						std::optional<mpq_class> rat = o.y->is_rat();
-						if (rat && ratint(*rat)) {
+						if (o.y->rat && ratint(*o.y->rat)) {
 							if (rat->get_den()==1) {
-								int mul = static_cast<int>(rat->get_num().get_si());
+								int mul = static_cast<int>(o.y->rat->get_num().get_si());
 								return mul*o.x->offset;
 							}
 						}
@@ -1248,6 +1591,8 @@ void Expr::set_offset() {
 					case Function::Ty::Sin:
 					case Function::Ty::Log:
 						return f.arg->offset;
+					case Function::Ty::Sqrt: return f.arg->offset/2;
+					case Function::Ty::Cbrt: return f.arg->offset/3;
 					case Function::Ty::Integrate:
 						return f.arg->offset+1;
 					case Function::Ty::Differentiate:
@@ -1256,135 +1601,157 @@ void Expr::set_offset() {
 				}
 			},
 			[&](Var& x) {
-				if (x.ent) return x.ent->output.offset;
+				if (!x.ent.expired()) return x.ent.lock()->output->get_offset();
 				if (x.name=="i") return 0;
 				else return 1;
 			}
 	}, v);
 }
 
-RPolynomial<> Expr::gf(int len) const {
-	if (!*cont) return RPolynomial();
+template<class R>
+RPolynomial<R> EvalJob<R>::gf(ConstExprPtr ex, int len) const {
+	if (!*cont) return RPolynomial<R>();
 
-	auto wrap = [&]() {
-		return std::visit(overloaded {
-			[&](mpq_class const& q) {
-				return len>=0 ? RPolynomial<>({q}) : RPolynomial<>();
-			},
-			[&](Op const& o) {
-				switch (o.ty) {
-					case Op::Ty::Div: {
-						RPolynomial num = o.x->gf(len+o.y->offset);
-						RPolynomial den = o.y->gf(len-num.offset+2*o.y->offset);
+	return std::visit(overloaded {
+		[&](mpq_class const& q) {
+			return len>=0 ? RPolynomial<R>({ctor(q)}) : RPolynomial<R>();
+		},
+		[&](Op const& o) {
+			switch (o.ty) {
+				case Op::Ty::Div: {
+					RPolynomial num = gf(o.x, len+o.y->offset);
+					RPolynomial den = gf(o.y, len-num.offset+2*o.y->offset);
 
-						if (den.offset!=o.y->offset) {
-							std::cout<<"recomputing values for ur screwed up division operation. sorry! kinda bad at this"<<std::endl;
-							num = o.x->gf(len+den.offset);
-							den = o.y->gf(len-num.offset+2*den.offset);
-						}
+					if (den.offset!=o.y->offset) {
+						std::cout<<"recomputing values for ur screwed up division operation. sorry! kinda bad at this"<<std::endl;
+						num = gf(o.x, len+den.offset);
+						den = gf(o.y, len-num.offset+2*den.offset);
+					}
 
-						num.mul(den.inv(len-num.offset), len);
-						return num;
-					}
-					case Op::Ty::Pow: {
-						std::optional<mpq_class> rat = o.y->is_rat();
-						if (rat && ratint(*rat)) {
-							return o.x->gf(len).pow(len, rat->get_num().get_si(), rat->get_den().get_si());
-						}
-
-						RPolynomial mult = o.x->gf(len).log(len);
-						mult.mul(o.y->gf(len), len);
-						return mult.exp(len);
-					}
-					case Op::Ty::Add:
-					case Op::Ty::Sub: {
-						RPolynomial l = o.x->gf(len);
-						auto ygf = o.y->gf(len);
-
-						if (o.ty==Op::Ty::Sub) l-=ygf; else l+=ygf;
-						return l;
-					}
-					case Op::Ty::Mul: {
-						RPolynomial out = o.x->gf(len-o.y->offset);
-						out.mul(o.y->gf(len-out.offset), len);
-						return out;
-					}
-					case Op::Ty::Substitute: {
-						RPolynomial sub_into = o.x->gf(len/o.y->offset);
-						return o.y->gf(len/sub_into.offset).substitute(sub_into, len);
-					}
+					num.mul(den.inv(len-num.offset), len);
+					return num;
 				}
-			},
-			[&](Function const& f) {
-				int off = f.arg->offset;
-				switch (f.ty) {
-					case Function::Ty::Exp: return f.arg->gf(std::max(0,len-off)).exp(len);
-					case Function::Ty::Cos: return f.arg->gf(std::max(0,len-2*off)).sin_cos(len, false);
-					case Function::Ty::Sin: return f.arg->gf(len).sin_cos(len, true);
-					case Function::Ty::Log: return f.arg->gf(len).log(len);
-					case Function::Ty::Differentiate: {
-						RPolynomial p = f.arg->gf(len+1);
-						p.derivative();
-						return p;
+				case Op::Ty::Pow: {
+					if (o.y->rat && ratint(*o.y->rat)) {
+						return gf(o.x, len).pow(len, o.y->rat->get_num().get_si(), o.y->rat->get_den().get_si());
 					}
-					case Function::Ty::Integrate: {
-						RPolynomial p = f.arg->gf(len-1);
-						p.integral();
-						return p;
-					}
-					case Function::Ty::Negate: {
-						auto g = f.arg->gf(len);
-						g.negate();
-						return g;
-					}
+
+					RPolynomial mult = gf(o.x, len).log(len);
+					mult.mul(gf(o.y, len), len);
+					return mult.exp(len);
 				}
-			},
-			[&](Var const& x) {
-				if (x.ent) return x.ent->output;
-				if (x.name=="i") return RPolynomial<>({IRat(0,1)});
-				return RPolynomial<>({IRat(1)},1);
+				case Op::Ty::Add:
+				case Op::Ty::Sub: {
+					RPolynomial l = gf(o.x, len);
+					auto ygf = gf(o.y, len);
+
+					if (o.ty==Op::Ty::Sub) l-=ygf; else l+=ygf;
+					return l;
+				}
+				case Op::Ty::Mul: {
+					RPolynomial out = gf(o.x, len-o.y->offset);
+					out.mul(gf(o.y, len-out.offset), len);
+					return out;
+				}
+				case Op::Ty::Substitute: {
+					RPolynomial sub_into = gf(o.x, len/std::max(o.y->offset,1));
+					return gf(o.y, len/std::max(sub_into.offset,1)).substitute(sub_into, len);
+				}
 			}
-		}, v);
-	}();
+		},
+		[&](Function const& f) {
+			int off = f.arg->offset;
+			switch (f.ty) {
+				case Function::Ty::Exp: return gf(f.arg, std::max(0,len-off)).exp(len);
+				case Function::Ty::Cos: return gf(f.arg, std::max(0,len-2*off)).sin_cos(len, false);
+				case Function::Ty::Sin: return gf(f.arg, len).sin_cos(len, true);
+				case Function::Ty::Log: return gf(f.arg, len).log(len);
+				case Function::Ty::Sqrt: return gf(f.arg, len).pow(len,1,2);
+				case Function::Ty::Cbrt: return gf(f.arg, len).pow(len,1,3);
+				case Function::Ty::Differentiate: {
+					RPolynomial p = gf(f.arg, len+1);
+					p.derivative();
+					return p;
+				}
+				case Function::Ty::Integrate: {
+					RPolynomial p = gf(f.arg, len-1);
+					p.integral();
+					return p;
+				}
+				case Function::Ty::Negate: {
+					auto g = gf(f.arg, len);
+					g.negate();
+					return g;
+				}
+			}
+		},
+		[&](Var const& x) {
+			if (!x.ent.expired()) {
+				std::lock_guard lock(*nb_lock);
+				if (!x.ent.expired()) {
+					auto ptr = x.ent.lock();
+					auto out_cast = dynamic_cast<EntryOutput<R> const*>(ptr->output.get());
 
-	return wrap;
+					if (out_cast) return out_cast->output;
+					else return RPolynomial<R>::from(ptr->output->get_poly());
+				} else {
+					throw MissingDep(x.name);
+				}
+			}
+
+			if (x.name=="i") {
+				return RPolynomial<R>({ctor({0,1})});
+			} else return RPolynomial<R>({ctor(1)},1);
+		}
+	}, ex->v);
 }
 
-std::optional<mpq_class> Expr::is_rat() const {
-	return std::visit(overloaded {
+void Expr::is_rat() {
+	rat = std::visit(overloaded {
 		[&](mpq_class const& q) {return std::make_optional<mpq_class>(q);},
 		[&](Op const& o) {
-			std::optional<mpq_class> rx = o.x->is_rat();
-			if (!rx) return std::optional<mpq_class>();
-			std::optional<mpq_class> ry = o.y->is_rat();
-			if (!ry) return std::optional<mpq_class>();
+			o.x->is_rat();
+			o.y->is_rat();
+
+			if (!o.x->rat || !o.y->rat) return std::optional<mpq_class>();
+
+			auto& rx =*o.x->rat, &ry=*o.y->rat;
 
 			switch (o.ty) {
-				case Op::Ty::Div: return std::make_optional<mpq_class>(*rx / *ry); break;
+				case Op::Ty::Div: return std::make_optional<mpq_class>(rx / ry); break;
 				case Op::Ty::Pow:
-					if (!ratint(*ry))
+					if (!ratint(ry))
 						return std::optional<mpq_class>();
 
-					return rat_pow(ry->get_num().get_si(),ry->get_den().get_si(),*rx); break;
-				case Op::Ty::Sub: return std::make_optional<mpq_class>(*rx - *ry); break;
-				case Op::Ty::Add: return std::make_optional<mpq_class>(*rx + *ry); break;
-				case Op::Ty::Mul: return std::make_optional<mpq_class>(*rx * *ry); break;
+					return rat_pow(ry.get_num().get_si(),ry.get_den().get_si(),rx); break;
+				case Op::Ty::Sub: return std::make_optional<mpq_class>(rx - ry); break;
+				case Op::Ty::Add: return std::make_optional<mpq_class>(rx + ry); break;
+				case Op::Ty::Mul: return std::make_optional<mpq_class>(rx * ry); break;
 				//easy optimization, but im way too lazy for this rn
 				case Op::Ty::Substitute: return std::optional<mpq_class>();
 			}
 		},
 		[&](Var const& var) {
-			if (var.name!="x" && var.name!="i" && var.ent) {
-				auto cons = var.ent->output.is_constant();
+			if (var.name!="x" && var.name!="i" && !var.ent.expired()) {
+				auto cons = var.ent.lock()->output->is_constant();
 				if (cons && !cons->i) return std::optional<mpq_class>(cons->r);
 			}
 
 			return std::optional<mpq_class>();
 		},
 		[&](Function const& f) {
-			if (f.ty==Function::Ty::Negate) {
-				std::optional<mpq_class> rarg = f.arg->is_rat();
-				if (rarg) return std::make_optional<mpq_class>(-*rarg);
+			f.arg->is_rat();
+			if (f.arg->rat) {
+				mpq_class& rarg = *f.arg->rat;
+				switch (f.ty) {
+					case Function::Ty::Negate:
+						return std::make_optional<mpq_class>(-rarg);
+					case Function::Ty::Sqrt:
+						return rat_pow(1,2,rarg);
+					case Function::Ty::Cbrt:
+						return rat_pow(1,3,rarg);
+					default: break;
+				}
 			}
 
 			return std::optional<mpq_class>();
@@ -1430,7 +1797,7 @@ void Expr::link(Notebook& nb) {
 	}, v);
 }
 
-void Notebook::check() {
+void Notebook::check(std::unique_lock<std::mutex>& lock) {
 	for (auto ent: entries) {
 		ent->cycle_mark=0;
 		if (ent->cycle) {
@@ -1478,14 +1845,17 @@ void Notebook::check() {
 				k->mark++;
 		}
 
-		if (k->deps.count==k->mark) Entry::evaluate(k);
+		if (k->deps.count==k->mark) Entry::evaluate(k, lock);
 	}
 }
 
-EntryPtr Notebook::add_entry(std::string name, std::string value, int len) {
-	std::lock_guard lock(*nb_lock);
+EntryPtr Notebook::add_entry(std::string name, std::string value, int len, Entry::OutputKind outkind, int float_prec) {
+	std::unique_lock lock(*nb_lock);
 
-	EntryPtr ent = std::make_shared<Entry>(Entry {.name=name, .nb_lock=nb_lock, .len=len, .cycle=true});
+	EntryPtr ent = std::make_shared<Entry>(Entry {
+		.name=name, .nb_lock=nb_lock, .len=len, .cycle=true,
+		.out_kind=outkind, .float_prec=float_prec
+	});
 
 	ent->parse(value);
 
@@ -1515,13 +1885,13 @@ EntryPtr Notebook::add_entry(std::string name, std::string value, int len) {
 
 	entries.push_back(ent);
 
-	check();
+	check(lock);
 
 	return ent;
 }
 
 void Notebook::remove_entry(EntryPtr ent) {
-	std::lock_guard lock(*nb_lock);
+	std::unique_lock lock(*nb_lock);
 
 	ent->cancel();
 
@@ -1547,15 +1917,15 @@ void Notebook::remove_entry(EntryPtr ent) {
 		dep->cycle=true;
 	}
 
-	check();
+	check(lock);
 }
 
-void Notebook::update_entry(EntryPtr ent, std::string value, int len) {
-	std::lock_guard lock(*nb_lock);
+void Notebook::update_entry(EntryPtr ent, std::string value, int len, Entry::OutputKind outkind, int float_prec) {
+	std::unique_lock lock(*nb_lock);
 
 	ent->parse(value);
 
-	ent->len=len;
+	ent->len=len, ent->out_kind=outkind, ent->float_prec=float_prec;
 
 	for (auto& [k,v]: ent->deps) {
 		for (auto fit=names.find_begin(k); fit!=names.find_end(); ++fit) {
@@ -1579,11 +1949,11 @@ void Notebook::update_entry(EntryPtr ent, std::string value, int len) {
 
 	ent->cycle=true;
 
-	check();
+	check(lock);
 }
 
 void Notebook::rename_entry(EntryPtr ent, std::string new_name) {
-	std::lock_guard lock(*nb_lock);
+	std::unique_lock lock(*nb_lock);
 
 	if (ent->name.size()) {
 		for (auto it=names.find_begin(ent->name); it!=names.find_end(); ++it) {
@@ -1601,7 +1971,7 @@ void Notebook::rename_entry(EntryPtr ent, std::string new_name) {
 	ent->name=new_name;
 
 	if (new_name.size()) {
-		names.insert(new_name, ent);
+		names.insert(ent->name, ent);
 
 		for (EntryPtr ent2: entries) {
 			if (ent2->deps[new_name]) {
@@ -1612,7 +1982,7 @@ void Notebook::rename_entry(EntryPtr ent, std::string new_name) {
 		}
 	}
 
-	check();
+	check(lock);
 }
 
 //Notebook::~Notebook() {
@@ -1627,142 +1997,26 @@ void ThreadPool::run() {
 
 		busy--;
 
-		while (unstarted_mul.empty() && unstarted_eval.empty()) {
+		while (unstarted.empty()) {
 			cond_queue.wait(lock);
 		}
 
 		busy++;
 
-		if (unstarted_mul.size()) {
-			MulJobPtr ptr = unstarted_mul.front();
-			unstarted_mul.pop();
-			MulJob& j = *ptr;
-			cont = j.cont_ptr;
+		JobPtr ptr = unstarted.front();
+		unstarted.pop();
 
-			lock.unlock();
-
-			j.x.karatsuba_mul(j.incs[j.step], j.len);
-
-			lock.lock();
-
-			int num_job=0;
-			auto completed = j.completed.lock();
-			if (completed && *cont) {
-				completed->push_back(ptr);
-
-				for (int i=0; i<j.step; i++) {
-					MulJob newjob = j;
-					newjob.i=j.i+(1<<i), newjob.step=i;
-
-					if (newjob.i>=j.num) break;
-
-					pool.unstarted_mul.push(std::make_shared<MulJob>(std::move(newjob)));
-					num_job++;
-				}
-			}
-
-			lock.unlock();
-
-			for (int i=1; i<num_job; i++) cond_queue.notify_one();
-		} else {
-			EvalJobPtr ptr = unstarted_eval.front();
-			unstarted_eval.pop();
-			lock.unlock();
-
-			cont = ptr->cont_ptr;
-			ptr->run(false);
-		}
+		lock.unlock();
+		ptr->run(ptr);
+		lock.lock();
+		ptr->done=true;
+		lock.unlock();
 
 		cond_complete.notify_all();
 	}
 }
 
 #ifdef EMSCRIPTEN
-//Notebook nb;
-//
-//char* tocstr(std::string const& str) {
-//	char* cstr = new char[str.size()+1];
-//	std::copy(str.c_str(), str.c_str()+str.size()+1, cstr);
-//	return cstr;
-//}
-//
-//EMSCRIPTEN_KEEPALIVE
-//extern "C" EntryPtr add_ent(const char* name, const char* value, int len) {
-////	std::cout<<mpz_class(5)*mpz_class(10)<<std::endl;
-////	std::cout<<(mpz_class(5)<<3)<<std::endl;
-////	std::cout<<numbits(mpz_class(7))<<std::endl;
-////
-////	mpz_class x(15);
-////	mpz_tdiv_r_2exp(x.get_mpz_t(), x.get_mpz_t(), 2);
-////	std::cout<<x<<std::endl;
-//
-//	return nb.add_entry(name, value, len);
-//}
-//
-//EMSCRIPTEN_KEEPALIVE
-//extern "C" void up_ent(EntryPtr ent, const char* value, int len) {
-//	return nb.update_entry(ent, value, len);
-//}
-//
-//EMSCRIPTEN_KEEPALIVE
-//extern "C" void del_ent(EntryPtr ent) {
-//	return nb.remove_entry(ent);
-//}
-//
-//EMSCRIPTEN_KEEPALIVE
-//extern "C" char const* get_state(EntryPtr ent) {
-//	if (ent->changed) {
-//		ent->changed=false;
-//		return "changed";
-//	} else {
-//		return false;
-//	}
-//}
-//
-//EMSCRIPTEN_KEEPALIVE
-//extern "C" char const* entry_error(EntryPtr ent) {
-//	if (ent->parse_error) return ent->parse_error->c_str();
-//	else if (ent->missing_dep) return ent->missing_dep->what();
-//	else if (ent->cycle) return "dependency cycle";
-//	else if (ent->eval_error) return ent->eval_error->c_str();
-//	else return nullptr;
-//}
-//
-//EMSCRIPTEN_KEEPALIVE
-//extern "C" char* get_tex_input(EntryPtr ent) {
-//	std::ostringstream oss;
-//	ent->ex->tex(oss);
-//	return tocstr(oss.str());
-//}
-//
-//EMSCRIPTEN_KEEPALIVE
-//extern "C" char* get_output(EntryPtr ent) {
-//	std::ostringstream oss;
-//
-//	RPolynomial<>& x = ent->output;
-//
-//	ent->ex->tex(std::cout);
-//	std::cout<<std::endl;
-//	std::cout<<x<<std::endl;
-//
-//	for (int j=0; j<x.offset; j++) {
-//		oss<<"\n\n";
-//	}
-//
-//	for (int i=0; i<std::min(x.coeffs.size(), ent->len); i++) {
-//		mpz_class gcd;
-//		mpz_gcd(gcd.get_mpz_t(), x.coeffs[i].get_mpz_t(), x.den.get_mpz_t());
-//		mpz_class num = x.coeffs[i]/gcd; mpz_class den=ent->output.den/gcd;
-//		oss<<num<<"\n"<<den<<"\n";
-//	}
-//
-//	return tocstr(oss.str());
-//}
-//
-//EMSCRIPTEN_KEEPALIVE
-//extern "C" void clear_nb() {
-//	nb = Notebook();
-//}
 
 EMSCRIPTEN_BINDINGS(cas) {
 	class_<Entry>("Entry")
@@ -1783,6 +2037,11 @@ EMSCRIPTEN_BINDINGS(cas) {
     .value("Updated", Entry::Status::Updated)
 		.value("NoChange", Entry::Status::NoChange)
     .value("Loading", Entry::Status::Loading);
+
+	enum_<Entry::OutputKind>("OutputKind")
+    .value("OGF", Entry::OutputKind::OGF)
+		.value("EGF", Entry::OutputKind::EGF)
+    .value("Float", Entry::OutputKind::Float);
 }
 
 #else
@@ -1795,13 +2054,13 @@ int main() {
 	cont = std::make_shared<bool>(true);
 
 	Notebook n;
-	n.add_entry("a", "sin(1+x) + ln(1/x^2) - cos(x)+e^(x^2+1-1)+int(d(sin(x)))", 50)->ex->tex(std::cout);
-//	n.add_entry("b", "a+1", 50)->wait();
+	n.add_entry("a", "(e^x)", 10, Entry::OutputKind::OGF, 53)->wait();
+	n.add_entry("b", "a(1+x)", 10, Entry::OutputKind::Float, 53)->wait();
 //	n.add_entry("b", "exp(exp(x)-1)", 300)->wait();
 //	n.add_entry("b", "1/(1-x-i)", 1000);
 
 	unsigned ms = duration_cast<milliseconds>(high_resolution_clock::now()-tp).count();
-	std::cout<<n.entries[0]->output<<std::endl;
+	std::cout<<n.entries[0]->get_output()<<std::endl;
 	std::cout<<ms<<" ms"<<std::endl;
 }
 

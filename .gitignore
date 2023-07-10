@@ -17,3 +17,4 @@ cmake-build-release/
 .DS_Store
 web/.parcel-cache/
 .cmake/
+.cache

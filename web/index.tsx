@@ -22,8 +22,6 @@ import {
 	Popover,
 	Slider,
 	Stack,
-	Tabs,
-	Tab,
 	TextField,
 	ThemeProvider,
 	Typography,
@@ -38,7 +36,7 @@ import {
 } from "@mui/material";
 
 import {Notebook, NotebookData, delNotebook, makeNotebook, DisplayEntry} from "./Notebook";
-import {AddEntry, Entry} from "./Entry";
+import {AddEntry, Entry, emptyAddEnt, toAddEnt} from "./Entry";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import {DragStack} from "./DragStack";
@@ -81,11 +79,11 @@ function App({CAS}: {CAS: any}) {
 		}
 
 		setTabs(new_tabs);
-		let cur = parseInt(window.localStorage.getItem("current"));
-		if (!isNaN(cur)) setTab(cur);
+		let cur = window.localStorage.getItem("current");
+		if (cur) setTab(parseInt(cur));
 
 		return () => {
-			for (let tab of tabsRef.current) delNotebook(tab.data);
+			for (let tab of tabsRef.current) if (tab.data) delNotebook(tab.data);
 		};
 	}, []);
 
@@ -99,18 +97,18 @@ function App({CAS}: {CAS: any}) {
 		window.localStorage.setItem("current", `${i}`);
 	};
 
-	let updateTab = (idx, newTab) => {
+	let updateTab = (idx: number, newTab: Tab) => {
 		let newTabs = [...tabs];
 		newTabs[idx] = newTab;
 		updateTabs(newTabs);
 
-		window.localStorage.setItem(`tab-${newTab.id}`, JSON.stringify({
-			name: newTab.name,
-			entries: newTab.data.entries.map((x) => {return {
-				name: x.name, value: x.value, len: x.len, autoupdate: x.autoupdate
-			}}),
-			dispEntries: newTab.data.dispEntries
-		}));
+		if (newTab.data) {
+			window.localStorage.setItem(`tab-${newTab.id}`, JSON.stringify({
+				name: newTab.name,
+				entries: newTab.data.entries.map(toAddEnt),
+				dispEntries: newTab.data.dispEntries
+			}));
+		}
 	};
 
 	useEffect(() => {
@@ -120,9 +118,12 @@ function App({CAS}: {CAS: any}) {
 	}, [tab, tabs]);
 
 	let [deletion, setDeletion] = useState<null | number>(null);
+	let [deleteName, setDeleteName] = useState("");
+
 	let do_delete = (del) => () => {
-		if (del) {
-			delNotebook(tabs[deletion].data);
+		if (del && deletion!=null) {
+			if (tabs[deletion].data)
+				delNotebook(tabs[deletion].data!);
 			let newTabs = [...tabs];
 			newTabs.splice(deletion, 1);
 			updateTabs(newTabs);
@@ -155,19 +156,19 @@ function App({CAS}: {CAS: any}) {
 
 		if (i==tab) inner = (<>
 			{inner}
-			<IconButton size={"small"} onClick={() => setDeletion(i)} >
+			<IconButton size={"small"} onClick={() => {setDeletion(i); setDeleteName(x.name);}} >
 				<Close fontSize={"small"} />
 			</IconButton>
 		</>);
 
-		return {key:x.id, el: tab_box(inner, i)};
+		return {key: `${x.id}`, el: tab_box(inner, i)};
 	});
 
 	tab_els.unshift({key: "home", el: tab_box(<InputBase disabled={tab!=-1} value="Home" readOnly />, -1)});
 
 	let cur_tab = <CircularProgress />;
 	if (tab>=0 && tabs[tab].data) {
-		cur_tab = <Notebook CAS={CAS} data={tabs[tab].data} setData={(data) => updateTab(tab, {...tabs[tab], data})} />;
+		cur_tab = <Notebook CAS={CAS} data={tabs[tab].data!} setData={(data) => updateTab(tab, {...tabs[tab], data})} />;
 	} else if (tab==-1) {
 		cur_tab = (<>
 			<Typography variant={"h4"} >the generatingfunctionologist's playground</Typography>
@@ -187,7 +188,7 @@ function App({CAS}: {CAS: any}) {
         aria-describedby="alert-dialog-description"
       >
         <DialogTitle id="alert-dialog-title">
-					Delete notebook {tabs[deletion]?.name}?
+					Delete notebook {deleteName}?
         </DialogTitle>
         <DialogActions>
           <Button onClick={do_delete(false)} >Cancel</Button>
@@ -197,7 +198,7 @@ function App({CAS}: {CAS: any}) {
 
 			<Container maxWidth="md" sx={{py: 3}} >
 				<Stack direction={"row"} >
-					<DragStack vertical={true} direction={"row"} alignItems={"end"} elements={tab_els} moveElement={(i,to) => {
+					<DragStack draggable={true} vertical={false} direction={"row"} alignItems={"end"} elements={tab_els} moveElement={(i,to) => {
 						if (i==0 || to==0) return;
 						i--, to--;
 
@@ -225,28 +226,39 @@ function App({CAS}: {CAS: any}) {
 	);
 }
 
-CASModule().then((cas) => {
-	const darkTheme = createTheme({
-		palette: {
-			mode: 'dark',
-		},
-	});
+function AppLoad() {
+	let [CAS, setCAS] = useState(null);
+	useEffect(() => {
+		if (!window.hasOwnProperty("CAS"))
+			window["CAS"] = CASModule();
 
-	let init = () => {
-		const root = ReactDOM.createRoot(
-			document.getElementById('root') as HTMLElement
-		);
+		window["CAS"].then((cas) => setCAS(cas));
+	}, []);
 
-		root.render(
-		<React.StrictMode>
-			<ThemeProvider theme={darkTheme}>
-				<CssBaseline enableColorScheme />
-				<App CAS={cas} />
-			</ThemeProvider>
-		</React.StrictMode>
-		);
-	};
+	if (CAS) return <App CAS={CAS} />;
+	else return (<Stack alignItems={"center"} justifyContent={"center"} sx={{height: "100vh"}} >
+		<CircularProgress />
+		<Typography>loading, like, a shitload of webassembly...</Typography>
+	</Stack>);
+}
 
-	if (document.readyState=="complete") init();
-	else window.onload = init;
+const darkTheme = createTheme({
+	palette: {
+		mode: 'dark',
+	},
 });
+
+window.onload = () => {
+	const root = ReactDOM.createRoot(
+		document.getElementById('root') as HTMLElement
+	);
+
+	root.render(
+	<React.StrictMode>
+		<ThemeProvider theme={darkTheme}>
+			<CssBaseline enableColorScheme />
+			<AppLoad/>
+		</ThemeProvider>
+	</React.StrictMode>
+	);
+};

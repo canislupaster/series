@@ -1,7 +1,7 @@
-import React, {useEffect, useRef, useState} from "react";
+import React, {ReactElement, useEffect, useRef, useState} from "react";
 import {Alert, Container, Divider, Paper, Stack} from "@mui/material";
 
-import {AddEntry, Entry, TextEntry} from "./Entry";
+import {AddEntry, Entry, TextEntry, emptyAddEnt} from "./Entry";
 
 import {DragStack} from "./DragStack";
 import {DragHandle} from "@mui/icons-material";
@@ -12,22 +12,20 @@ type NotebookData = {
 	entries: Entry[],
 	dispEntries: DisplayEntry[],
 	toAddEnt: AddEntry,
-	nextEntryId: React.Ref<number>,
+	nextEntryId: React.MutableRefObject<number>,
 	nb: any
 };
 
-const emptyAddEnt: AddEntry = {
-	name: "", value: "", len: 50, autoupdate: true, add: true
-};
+let addAddEnt = (CAS, nb, addEnt) => nb.addEntry(addEnt.name, addEnt.value, addEnt.len, CAS.OutputKind[addEnt.output_kind], addEnt.float_prec);
 
 function makeNotebook(CAS: any, defaultEntries: AddEntry[], dispEntries: DisplayEntry[], nextEntryId): NotebookData {
 	let nb = new CAS.Notebook();
 
 	for (let d of dispEntries)
-		if (d.ty=="ref" && d.to>=nextEntryId.current) nextEntryId.current=d.to+1;
+		if (d.ty=="ref" && d.id>=nextEntryId.current) nextEntryId.current=d.id+1;
 
 	let entries: Entry[] = defaultEntries.map((addEnt) => {
-		let ptr = nb.addEntry(addEnt.name, addEnt.value, addEnt.len);
+		let ptr = addAddEnt(CAS, nb, addEnt);
 		return {...addEnt, ptr, output_step: 0, loading: true, add: false};
 	});
 
@@ -47,20 +45,19 @@ interface NotebookProps {
 function Notebook({CAS, data, setData}: NotebookProps) {
 	let [toAddEnt, setToAddEnt] = useState<AddEntry>(emptyAddEnt);
 
-	let entries =data.entries, nb=data.nb, nextEntryId=data.nextEntryId, dispEntries=data.dispEntries;
+	let entries =data.entries, nb=data.nb, dispEntries=data.dispEntries;
 
 	let new_data = data;
 	let setEntries = (entries) => setData(new_data = {...new_data, entries});
 	let setDispEntries = (dispEntries) => setData(new_data = {...new_data, dispEntries});
 
 	let update = (entry: Entry): [Entry, boolean] => {
-		let newent = {...entry};
-
 		let stat = entry.ptr.status();
-		newent.error = null;
+		let newent = {...entry, error: undefined};
 
-		if (stat==CAS.Status.Loading) newent.loading=true;
-		else if (stat==CAS.Status.Updated) {
+		if (stat==CAS.Status.Loading && !newent.loading) {
+			newent.loading=true;
+		} else if (stat==CAS.Status.Updated) {
 			newent.loading=false;
 
 			let err_ptr = entry.ptr.getError();
@@ -75,22 +72,21 @@ function Notebook({CAS, data, setData}: NotebookProps) {
 					newent.output.pop();
 				newent.output_step++;
 			}
+		} else {
+			return [entry, false];
 		}
 
-		return [newent, stat==CAS.Status.Updated || (!entry.loading && stat==CAS.Status.Loading)];
+		return [newent, true];
 	};
 
 	let updateEntries = (newEntries, forceUpdate=false) => {
-		let did_change=false;
 		newEntries = newEntries.map((x) => {
 			let [y,z] = update(x);
-			if (z) did_change=true;
+			if (z) forceUpdate=true;
 			return y;
 		});
 
-		if (did_change || forceUpdate) {
-			setEntries(newEntries);
-		}
+		if (forceUpdate) setEntries(newEntries);
 	};
 
 	useEffect(() => {
@@ -101,11 +97,12 @@ function Notebook({CAS, data, setData}: NotebookProps) {
 		return () => window.clearTimeout(int);
 	}, [entries]);
 
-	let addEnt = (ent) => {
-		let ptr = nb.addEntry(ent.name, ent.value, ent.len);
+	let addEnt = (ent: AddEntry) => {
+		console.log(ent);
+		let ptr = addAddEnt(CAS, nb, ent);
 
-		updateEntries([...entries, {...ent, ptr, output_step: 0, loading: true, add: false}], true);
-		setDispEntries([...dispEntries, {ty: "ref", id: nextEntryId.current++, to: entries.length}]);
+		updateEntries([...entries, {...ent, ptr, output_step: 0, loading: true}], true);
+		setDispEntries([...dispEntries, {ty: "ref", id: data.nextEntryId.current++, to: entries.length}]);
 	};
 
 	let setEnt = (idx, ent?: AddEntry) => {
@@ -127,36 +124,44 @@ function Notebook({CAS, data, setData}: NotebookProps) {
 
 			setDispEntries(newDispEntries);
 		} else {
-			if (ent.value!=oldent.value || ent.len!=oldent.len)
-				nb.updateEntry(oldent.ptr, ent.value, ent.len);
+			let update_props: (keyof AddEntry)[] = ["value", "len", "output_kind", "float_prec"];
+
 			if (ent.name!=oldent.name)
 				nb.renameEntry(oldent.ptr, ent.name);
 
-			arr_cpy[idx]={...oldent, ...ent, add: false};
+			for (let prop of update_props) {
+				if (oldent[prop]==ent[prop]) continue;
+				nb.updateEntry(oldent.ptr, ent.value, ent.len, CAS.OutputKind[ent.output_kind], ent.float_prec);
+				break;
+			}
+
+			arr_cpy[idx]={...oldent, ...ent};
 		}
 
 		updateEntries(arr_cpy, true);
 	};
 
+	let [draggable, setDraggable] = useState(false);
+
 	let ents = dispEntries.map((ent, idx) => {
-		if (ent.ty=="txt") return {key: ent.id, el: <TextEntry txt={ent.txt} delEnt={() => {
+		if (ent.ty=="txt") return {key: `${ent.id}`, el: <TextEntry txt={ent.txt} setDraggable={setDraggable} delEnt={() => {
 				let arr_cpy = [...dispEntries];
 				arr_cpy.splice(idx,1);
 				setDispEntries(arr_cpy);
 			}} />};
-		else return {key: ent.id, el: <Entry entry={entries[ent.to]} setEnt={(newent) => setEnt(ent.to,newent)} ></Entry>};
+		else return {key: `${ent.id}`, el: <Entry setDraggable={setDraggable} entry={{...entries[ent.to], add:false}} setEnt={(newent) => setEnt(ent.to,newent)} ></Entry>};
 	});
 
-	let list = [];
+	let list: ReactElement[] = [];
 	if (entries.length==0) {
-		list.push(<Alert key={"alert"} severity="info">Make an equation below -- it will appear here</Alert>);
+		list.push(<Alert key={"alert"} severity="info" >Make an equation below -- it will appear here</Alert>);
 	}
 
-	list.push(<Entry key={"add"} entry={toAddEnt} setEnt={(ent) => setToAddEnt(ent)} addEnt={addEnt} ></Entry>);
+	list.push(<Entry setDraggable={setDraggable} key={"add"} entry={{...toAddEnt, add: true}} setEnt={(ent) => ent && setToAddEnt(ent)} addEnt={addEnt} ></Entry>);
 
 	return (
 		<Stack spacing={2} divider={<Divider orientation="horizontal" flexItem />} >
-			<DragStack elements={ents} moveElement={(i,to) => {
+			<DragStack draggable={draggable} elements={ents} vertical={true} moveElement={(i,to) => {
 				let arr_cpy = [...dispEntries];
 				let [removed] = arr_cpy.splice(i,1);
 				arr_cpy.splice(to,0,removed);

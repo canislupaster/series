@@ -3,17 +3,21 @@ project(cas CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_VERBOSE_MAKEFILE ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_COLOR_DIAGNOSTICS ON)
 
 add_subdirectory(corecommon)
 include_directories(./corecommon/src)
+
+add_compile_options(-Wall)
 
 if (EMSCRIPTEN)
     set(ENV{PKG_CONFIG_LIBDIR} "/Users/thomasmarlowe/Downloads/gmpbuild/lib/pkgconfig")
 
     #    set(EMCC_OPTIONS "SHELL:-s ASYNCIFY -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3 -s ALLOW_MEMORY_GROWTH -s USE_FREETYPE=1 -s USE_SDL=2 -s INITIAL_MEMORY=281608192")
     #    set(EMCC_LINK_OPTIONS "SHELL:-sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -s USE_FREETYPE=1 -s USE_SDL=2")
-    set(EMCC_OPTIONS "-fwasm-exceptions" "-pthread" )
-    set(EMCC_LINK_OPTIONS ${EMCC_OPTIONS} "-sENVIRONMENT=web,worker" "-sMODULARIZE" "-sEXPORT_ES6=1" "-sEXPORT_NAME=\"CASModule\"" "-lembind" "-sALLOW_MEMORY_GROWTH" "-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency")
+    set(EMCC_OPTIONS "-fwasm-exceptions" "-pthread" "-msimd128")
+    set(EMCC_LINK_OPTIONS ${EMCC_OPTIONS} "-sENVIRONMENT=web,worker" "-sMODULARIZE" "-sEXPORT_ES6=1" "-sEXPORT_NAME=\"CASModule\"" "-lembind" "-sALLOW_MEMORY_GROWTH" "-sASSERTIONS" "-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency")
     add_compile_options(${EMCC_OPTIONS})
     add_link_options(${EMCC_LINK_OPTIONS} "LINKER:--fatal-warnings")
 else()

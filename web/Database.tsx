@@ -16,7 +16,8 @@ import {
 
 import {ExpandLess, ExpandMore} from "@mui/icons-material";
 
-import {NotebookData, makeNotebook} from "./Notebook";
+import {DisplayEntry, NotebookData, makeNotebook} from "./Notebook";
+import { AddEntry, emptyAddEnt } from "./Entry";
 
 type IsOpen = {
 	open: boolean,
@@ -67,7 +68,7 @@ function DatabaseList({db, open, isOpen, setOpen, loading}: {db: DBEntry[], isOp
 	</List>);
 }
 
-function Database({open, nextId, CAS}: {open: (name: string, data: NotebookData) => void, nextId: React.Ref<number>, CAS: any}) {
+function Database({open, nextId, CAS}: {open: (name: string, data: NotebookData) => void, nextId: React.MutableRefObject<number>, CAS: any}) {
 	let [db,setDb] = useState<DBEntry[]>([]);
 	let [isOpen,setIsOpen] = useState<IsOpen[]>([]);
 
@@ -100,11 +101,11 @@ function Database({open, nextId, CAS}: {open: (name: string, data: NotebookData)
 		fetch(`./db/${file}`)
 			.then((resp) => resp.text())
 			.then((x: string) => {
-			let addEnt=[], dispEnt=[];
+			let addEnt: AddEntry[]=[], dispEnt: DisplayEntry[]=[];
 			while (true) {
 				let i: number;
 				let match = x.match(/(\d*)>\ *(?:(\w+)\ *=\ *)?([^=\n]+)/);
-				if (match) i=match.index; else i=x.length;
+				if (match) i=match.index!; else i=x.length;
 
 				let txt = x.slice(0,i).trim();
 				if (txt.length>0) dispEnt.push({ty: "txt", id: nextId.current++, txt});
@@ -112,10 +113,12 @@ function Database({open, nextId, CAS}: {open: (name: string, data: NotebookData)
 				console.log(match);
 				if (match===null) break;
 
-				x = x.slice(match.index+match[0].length);
+				x = x.slice(match.index!+match[0].length);
 
 				dispEnt.push({ty: "ref", id: nextId.current++, to: addEnt.length});
-				addEnt.push({name: match[2] || "", value: match[3], len: match[1] ? parseInt(match[1]) : 50, autoupdate: true, add: true});
+				addEnt.push({...emptyAddEnt,
+					name: match[2] || "", value: match[3], len: match[1] ? parseInt(match[1]) : 50
+				});
 			}
 
 			open(name,makeNotebook(CAS, addEnt, dispEnt, nextId));
