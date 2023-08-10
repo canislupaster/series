@@ -141,7 +141,7 @@ struct FactRat {
 
 			if (add) {fact_rat += t->x;} else {
 				fact_rat -= t->x;
-				if (other.fact>fact) mpq_neg(fact_rat.get_mpq_t(), fact_rat.get_mpq_t());
+				if (other.fact<=fact) mpq_neg(fact_rat.get_mpq_t(), fact_rat.get_mpq_t());
 			}
 
 			fact_rat /= t->fact_v;
@@ -381,7 +381,7 @@ struct RPolynomial {
 	thread_local static std::function<Rat(IRat<mpq_class> x)> ctor;
 	int offset;
 
-	thread_local static std::map<int, Vec> free;
+	thread_local static LazyInitialize<std::map<int, Vec>> free;
 	
 	void resize(int size) {
 		//just in case i add a mpq freelist lmao, probably wont make things any faster tho
@@ -392,13 +392,13 @@ struct RPolynomial {
 	RPolynomial(std::initializer_list<Rat> coeffs, int offset=0): coeffs(coeffs), offset(offset) {}
 
 	void get_free(int num_coeffs) {
-		if (free.empty()) return;
-		auto it = free.lower_bound(num_coeffs);
-		if (it==free.end()) it--;
+		if (free->empty()) return;
+		auto it = free->lower_bound(num_coeffs);
+		if (it==free->end()) it--;
 
 		coeffs.swap(it->second);
 		
-		free.erase(it);
+		free->erase(it);
 	}
 
 	RPolynomial(int num_coeffs=0, int offset=0): offset(offset) {
@@ -827,12 +827,12 @@ struct RPolynomial {
 	RPolynomial& operator=(RPolynomial const& other) {coeffs=other.coeffs; offset=other.offset; return *this;}
 
 	~RPolynomial() {
-		if (coeffs.size()>100) free.emplace(coeffs.size(), std::move(coeffs));
+		if (coeffs.size()>100) free->emplace(coeffs.size(), std::move(coeffs));
 	}
 };
 
 template<class T>
-thread_local std::map<int, std::vector<T>> RPolynomial<T>::free = {};
+thread_local LazyInitialize<std::map<int, std::vector<T>>> RPolynomial<T>::free([](){return std::map<int,std::vector<T>>();});
 
 template<class T>
 thread_local std::function<T(IRat<mpq_class>)> RPolynomial<T>::ctor = [](IRat<mpq_class> x){
@@ -2054,13 +2054,13 @@ int main() {
 	cont = std::make_shared<bool>(true);
 
 	Notebook n;
-	n.add_entry("a", "(e^x)", 10, Entry::OutputKind::OGF, 53)->wait();
-	n.add_entry("b", "a(1+x)", 10, Entry::OutputKind::Float, 53)->wait();
+	n.add_entry("y", "e^x", 100, Entry::OutputKind::OGF, 53)->wait();
+	n.add_entry("b", "y(x^1)*y(x^2)*y(x^3)*y(x^4)*y(x^5)*y(x^6)*y(x^7)*y(x^8)*y(x^9)*y(x^10)*y(x^11)*y(x^12)*y(x^13)*y(x^14)*y(x^15)*y(x^16)*y(x^17)*y(x^18)*y(x^19)*y(x^20)*y(x^21)*y(x^22)*y(x^23)*y(x^24)*y(x^25)*y(x^26)*y(x^27)*y(x^28)*y(x^29)*y(x^30)*y(x^31)*y(x^32)*y(x^33)*y(x^34)*y(x^35)*y(x^36)*y(x^37)*y(x^38)*y(x^39)*y(x^40)*y(x^41)*y(x^42)*y(x^43)*y(x^44)*y(x^45)*y(x^46)*y(x^47)*y(x^48)*y(x^49)*y(x^50)*y(x^51)*y(x^52)*y(x^53)*y(x^54)*y(x^55)*y(x^56)*y(x^57)*y(x^58)*y(x^59)*y(x^60)*y(x^61)*y(x^62)*y(x^63)*y(x^64)*y(x^65)*y(x^66)*y(x^67)*y(x^68)*y(x^69)*y(x^70)*y(x^71)*y(x^72)*y(x^73)*y(x^74)*y(x^75)*y(x^76)*y(x^77)*y(x^78)*y(x^79)*y(x^80)*y(x^81)*y(x^82)*y(x^83)*y(x^84)*y(x^85)*y(x^86)*y(x^87)*y(x^88)*y(x^89)*y(x^90)*y(x^91)*y(x^92)*y(x^93)*y(x^94)*y(x^95)*y(x^96)*y(x^97)*y(x^98)*y(x^99)", 100, Entry::OutputKind::OGF, 53)->wait();
 //	n.add_entry("b", "exp(exp(x)-1)", 300)->wait();
 //	n.add_entry("b", "1/(1-x-i)", 1000);
 
 	unsigned ms = duration_cast<milliseconds>(high_resolution_clock::now()-tp).count();
-	std::cout<<n.entries[0]->get_output()<<std::endl;
+	std::cout<<n.entries[1]->get_output()<<std::endl;
 	std::cout<<ms<<" ms"<<std::endl;
 }
 

@@ -87,7 +87,7 @@ function App({CAS}: {CAS: any}) {
 		};
 	}, []);
 
-	let updateTabs = (newTabs) => {
+	let updateTabs = (newTabs: Tab[]) => {
 		setTabs(newTabs); tabsRef.current = newTabs;
 		window.localStorage.setItem("tabs", newTabs.map((x) => x.id).join("\n"));
 	};
@@ -99,7 +99,8 @@ function App({CAS}: {CAS: any}) {
 
 	let updateTab = (idx: number, newTab: Tab) => {
 		let newTabs = [...tabs];
-		newTabs[idx] = newTab;
+		if (idx>=newTabs.length) newTabs.push(newTab)
+		else newTabs[idx] = newTab;
 		updateTabs(newTabs);
 
 		if (newTab.data) {
@@ -174,7 +175,7 @@ function App({CAS}: {CAS: any}) {
 			<Typography variant={"h4"} >the generatingfunctionologist's playground</Typography>
 			<Database open={(name,data) => {
 				setTab(tabs.length);
-				updateTabs([...tabs, {name, id: idNum.current++, data}]);
+				updateTab(tabs.length, {name, id: idNum.current++, data, addEntries: [], dispEntries: []});
 			}} nextId={idNum} CAS={CAS} ></Database>
 		</>);
 	}
@@ -214,7 +215,7 @@ function App({CAS}: {CAS: any}) {
 
 					<IconButton size={"small"} onClick={() => {
 						setTab(tabs.length);
-						updateTabs([...tabs, {name: "Untitled", id: idNum.current++, data: makeNotebook(CAS, [], [], idNum)}]);
+						updateTab(tabs.length, {name: "Untitled", id: idNum.current++, data: makeNotebook(CAS, [], [], idNum), addEntries: [], dispEntries: []});
 					}} ><AddIcon/></IconButton>
 				</Stack>
 

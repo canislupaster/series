@@ -8,4 +8,5 @@ module.exports = function (app) {
   });
 
   app.use("/db", serveStatic("./db"));
+  app.use("/cas.wasm.map", serveStatic("./cas.wasm.map"));
 };
