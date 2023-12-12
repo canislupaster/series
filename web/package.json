@@ -14,6 +14,9 @@
     "react-latex": "^2.0.0",
     "serve-static": "^1.15.0"
   },
+  "scripts": {
+    "build": "npx parcel build ./index.html --dist-dir ./dist --no-scope-hoist --public-url ./"
+  },
   "devDependencies": {
     "path-browserify": "^1.0.1"
   }
