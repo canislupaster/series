@@ -12,16 +12,12 @@ include_directories(./corecommon/src)
 add_compile_options(-Wall)
 
 if (EMSCRIPTEN)
-    set(ENV{PKG_CONFIG_LIBDIR} "/Users/thomasmarlowe/Downloads/gmpbuild/lib/pkgconfig")
-
     #    set(EMCC_OPTIONS "SHELL:-s ASYNCIFY -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3 -s ALLOW_MEMORY_GROWTH -s USE_FREETYPE=1 -s USE_SDL=2 -s INITIAL_MEMORY=281608192")
     #    set(EMCC_LINK_OPTIONS "SHELL:-sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -s USE_FREETYPE=1 -s USE_SDL=2")
     set(EMCC_OPTIONS "-fwasm-exceptions" "-pthread" "-msimd128")
         set(EMCC_LINK_OPTIONS ${EMCC_OPTIONS} "-sENVIRONMENT=web,worker" "-sDEMANGLE_SUPPORT" "-sMODULARIZE" "-sEXPORT_ES6=1" "-sEXPORT_NAME=\"CASModule\"" "-lembind" "-sINITIAL_MEMORY=281MB" "-sASSERTIONS" "-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency")
     add_compile_options(${EMCC_OPTIONS})
     add_link_options(${EMCC_LINK_OPTIONS} "LINKER:--fatal-warnings")
-else()
-    set(ENV{PKG_CONFIG_LIBDIR} "/usr/local/Cellar/gmp/6.2.1_1/lib/pkgconfig")
 endif()
 
 if(CMAKE_BUILD_TYPE MATCHES Debug)
@@ -51,10 +47,10 @@ target_link_options(cas PUBLIC ${GMPXX_LDFLAGS} ${GMP_LDFLAGS})
 target_link_libraries(cas corecommon PkgConfig::GMP PkgConfig::GMPXX)
 
 if (EMSCRIPTEN)
-set_target_properties(cas PROPERTIES
+    set_target_properties(cas PROPERTIES
         SUFFIX ".mjs"
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/web"
-        )
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/web/wasm"
+    )
 endif()
 
 #add_custom_command(TARGET cas POST_BUILD

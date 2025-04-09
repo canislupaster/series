@@ -1,3 +1,4 @@
+.idea
 CMakeLists.txt.user
 CMakeCache.txt
 CMakeFiles
@@ -14,7 +15,8 @@ web/node_modules/
 **/build/
 build-emcc/
 cmake-build-release/
-.DS_Store
 web/.parcel-cache/
+web/wasm
+**/.DS_Store
 .cmake/
 .cache

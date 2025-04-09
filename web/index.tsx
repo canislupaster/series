@@ -1,6 +1,6 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import ReactDOM from 'react-dom/client';
-import CASModule from "./cas.mjs";
+import CASModule from "./wasm/cas.mjs";
 
 import '@fontsource/roboto/300.css';
 import '@fontsource/roboto/400.css';
